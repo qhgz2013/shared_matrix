@@ -1,0 +1,24 @@
+# cached matrix
+*.mat
+# auto-saved file
+*.asv
+# log file
+*.log
+# result csv
+*.csv
+# python cache file
+__pycache__/
+*.pyc
+# mex symbol file
+*.pdb
+# output figures
+*.eps
+# compressed files
+*.gz
+*.tar
+*.war
+*.rar
+*.7z
+*.zip
+# compiled mex binaries
+*.mex[aw]64
