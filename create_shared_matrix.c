@@ -9,7 +9,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
     // SHARED MEMORY NAME CHECK
     char shmem_name[MAX_SHMEM_NAME_LENGTH];
-    if (0 != mxGetString(prhs[0], shmem_name, MAX_SHMEM_NAME_LENGTH))
+    if (!mxIsChar(prhs[0]) || mxGetString(prhs[0], shmem_name, MAX_SHMEM_NAME_LENGTH))
         mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Could not get input arg [1]: shared memory name");
     if (strlen(shmem_name) == 0)
         mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Empty shared memory name");
@@ -19,37 +19,32 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     unsigned long long* base_pointer = NULL;
     unsigned long long* output_value = NULL;
     if (nlhs == 1 || nlhs == 2) {
-        plhs[0] = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
-        if (plhs[0] == NULL)
-            mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Failed to call Matlab mex API: mxCreateNumericArray");
-        base_pointer = (unsigned long long*)mxGetPr(plhs[0]);
-        if (base_pointer == NULL)
-            mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null pointer from non-empty array");
-        if (nlhs == 2) {
-            plhs[1] = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
-            if (plhs[1] == NULL)
-                mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Failed to call Matlab mex API: mxCreateNumericArray");
-            output_value = (unsigned long long*)mxGetPr(plhs[1]);
-            if (output_value == NULL)
-                mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null pointer from non-empty array");
-        }
+#if SHMEM_API == SHMEM_WIN_API
+        if (nlhs == 1)
+            mexErrMsgIdAndTxt("SharedMatrix:NotEnoughOutput", "Win API based shared matrix needs to return a handle of the memory");
+#endif
+        MATLAB_CREATE_UINT64_RETURN_MATRIX(0, base_pointer, unsigned long long);
+        if (nlhs == 2)
+            MATLAB_CREATE_UINT64_RETURN_MATRIX(1, output_value, unsigned long long);
     }
     else {
         mexErrMsgIdAndTxt("SharedMatrix:InvalidOutput", "Too many output, max output: 2");
     }
-#if SHMEM_API == SHMEM_WIN_API
-    if (nlhs == 0)
-        mexErrMsgIdAndTxt("SharedMatrix:NotEnoughOutput", "Win API based shared matrix needs to return a handle of the memory");
-#endif
 
     // ARRAY ATTRIBUTE CHECK
+    unsigned long long array_attribute = 0;
     if (mxIsSparse(prhs[1])) {
+        array_attribute |= ARRAY_SPARSE;
+        SHMEM_DEBUG_OUTPUT("Attribute flag: ARRAY_SPARSE\n");
         mexErrMsgIdAndTxt("SharedMatrix:NotImplemented", "Sparse matrix is not implemented yet");
     }
     if (mxIsComplex(prhs[1])) {
+        array_attribute |= ARRAY_COMPLEX;
+        SHMEM_DEBUG_OUTPUT("Attribute flag: ARRAY_COMPLEX\n");
         mexErrMsgIdAndTxt("SharedMatrix:NotImplemented", "Complex data is not implemented yet");
     }
     if (!mxIsNumeric(prhs[1])) {
+        // TODO [prior: normal]: support logical type
         mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Only supports numeric data");
     }
     
@@ -106,7 +101,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (shmem == -1) {
         mexErrMsgIdAndTxt("SharedMatrix:NativeAPICallFailed", "POSIX API shm_open failed: %d", errno);
     }
-    int trunc_result = ftruncate(shm_fd, size);
+    int trunc_result = ftruncate(shmem, total_size);
     if (trunc_result == -1) {
         int trunc_errno = errno;
         shm_unlink(shmem_name);

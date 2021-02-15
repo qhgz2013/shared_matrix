@@ -1,5 +1,3 @@
-TODO: CODE REVIEW, LINUX TEST, WRITE TEST SAMPLE
-
 # Shared Matrix in Matlab
 
 A MEX-C library for creating or reading matrix using shared memory (parpool supports) to reduce unnecessary copies of memory.

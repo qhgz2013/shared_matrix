@@ -15,21 +15,23 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Got null object pointer from input argument");
         if (!mxIsCell(cell))
             mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Input argument [3] must be a cell");
-        if (mxGetM(cell) * mxGetN(cell) == 0)
-            return; // empty cell
-        mxArray* data_array = mxGetCell(cell, 0);
-        if (data_array == NULL)
-            mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null array object pointer");
-        // set dimension
-        const mwSize zero_dims[] = { 0, 0 };
-        mxSetDimensions(data_array, zero_dims, 2);
-        // detach array
-        mxSetPr(data_array, NULL);
+        if (mxGetM(cell) * mxGetN(cell) > 0) {
+            mxArray* data_array = mxGetCell(cell, 0);
+            if (data_array == NULL)
+                mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null array object pointer");
+            // set dimension
+            const mwSize zero_dims[] = { 0, 0 };
+            mxSetDimensions(data_array, zero_dims, 2);
+            // detach array
+            mxSetPr(data_array, NULL);
+        }
     }
 
     unsigned long long* ptr_base = (unsigned long long*)mxGetPr(prhs[1]);
     if (ptr_base == NULL)
         mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null data pointer from non-null array object");
+    if ((*ptr_base) == 0)
+        mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Pointer address is assigned to zero");
     SHMEM_DEBUG_OUTPUT("Base pointer: %p\n", *ptr_base);
     // release shared memory
 #if SHMEM_API == SHMEM_WIN_API
@@ -42,7 +44,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     CloseHandle(handle);
 #elif SHMEM_API == SHMEM_POSIX_API
     char shmem_name[MAX_SHMEM_NAME_LENGTH];
-    if (0 != mxGetString(prhs[0], shmem_name, MAX_SHMEM_NAME_LENGTH))
+    if (!mxIsChar(prhs[0]) || mxGetString(prhs[0], shmem_name, MAX_SHMEM_NAME_LENGTH))
         mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Could not get input arg [1]: shared memory name");
     if (strlen(shmem_name) == 0)
         mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Empty shared memory name");

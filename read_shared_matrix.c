@@ -9,7 +9,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
     // SHARED MEMORY NAME CHECK
     char shmem_name[MAX_SHMEM_NAME_LENGTH];
-    if (0 != mxGetString(prhs[0], shmem_name, MAX_SHMEM_NAME_LENGTH))
+    if (!mxIsChar(prhs[0]) || mxGetString(prhs[0], shmem_name, MAX_SHMEM_NAME_LENGTH))
         mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Could not get input arg [1]: shared memory name");
     if (strlen(shmem_name) == 0)
         mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Empty shared memory name");
@@ -18,18 +18,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     // OUTPUT ARGUMENT CHECK
     if (nlhs != 3)
         mexErrMsgIdAndTxt("SharedMatrix:InvalidOutput", "read_shared_matrix returns two values: data array, handle");
-    plhs[1] = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
-    if (plhs[1] == NULL)
-        mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Failed to call Matlab mex API: mxCreateNumericArray");
-    unsigned long long* output_handle = (unsigned long long*)mxGetPr(plhs[1]);
-    if (output_handle == NULL)
-        mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null pointer from non-empty array");
-    plhs[2] = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
-    if (plhs[2] == NULL)
-        mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Failed to call Matlab mex API: mxCreateNumericArray");
-    unsigned long long* output_pointer = (unsigned long long*)mxGetPr(plhs[2]);
-    if (output_pointer == NULL)
-        mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null pointer from non-empty array");
+    unsigned long long* output_handle = NULL;
+    unsigned long long* output_pointer = NULL;
+    MATLAB_CREATE_UINT64_RETURN_MATRIX(1, output_handle, unsigned long long);
+    MATLAB_CREATE_UINT64_RETURN_MATRIX(2, output_pointer, unsigned long long);
     
     // COMMON DEFINES FOR DIFFERENT API
 #if SHMEM_API == SHMEM_WIN_API
@@ -48,13 +40,14 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 #    define SHMEM_API_FAILURE_COND MAP_FAILED
 #endif
 #define SHMEM_EXC_CLEANUP_HANDLE_PTR(ptr_name,size) SHMEM_EXC_CLEANUP_PTR(ptr_name,size); SHMEM_EXC_CLEANUP_HANDLE
-#define SHMEM_ATTACH_PTR(ptr_name, size) \
+#define SHMEM_ATTACH_PTR(ptr_name, size) { \
     ptr_name = SHMEM_ATTACH_PTR_STMT(size); \
     if (ptr_name == SHMEM_API_FAILURE_COND) { \
         int attach_ptr_errno = SHMEM_ATTACH_PTR_ERRNO; \
         SHMEM_EXC_CLEANUP_HANDLE; \
         mexErrMsgIdAndTxt("SharedMatrix:NativeAPICallFailed", SHMEM_ATTACH_PTR_NAME "failed: %d", attach_ptr_errno); \
-    }
+    } \
+}
 
     // HEADER VALIDATION
     void* header_ptr = NULL;
@@ -77,7 +70,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     SHMEM_DEBUG_OUTPUT("Header size: %d\n", header_size);
     SHMEM_EXC_CLEANUP_PTR(header_ptr, 8);
     if (header_size == 0) {
-        CloseHandle(shmem);
+        SHMEM_EXC_CLEANUP_HANDLE;
         mexErrMsgIdAndTxt("SharedMatrix:CorruptMemory", "Read invalid header size");
     }
 
@@ -106,12 +99,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     mxArray* output_array = mxCreateNumericArray((mwSize)n_dims, dims, (int)matrix_type, mxREAL); // only supports real
     if (output_array == NULL) {
         SHMEM_EXC_CLEANUP_HANDLE;
+        free(dims);
         mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Failed to call Matlab mex API: mxCreateNumericArray");
     }
 
     // READ FULL SHARED MEMORY
-    // register cleanup variable "dims"
-#define SHMEM_EXC_CLEANUP_HANDLE_PTR2(ptr_name,size) SHMEM_EXC_CLEANUP_HANDLE_PTR(ptr_name,size); free(dims)
     void* ptr = NULL;
     SHMEM_ATTACH_PTR(ptr, total_size);
     char* payload_ptr = ((char*)ptr) + header_size + ARRAY_HEADER_SIZE;

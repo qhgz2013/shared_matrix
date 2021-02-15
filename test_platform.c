@@ -1,3 +1,4 @@
+#define SUPPRESS_NOT_SUPPORTED_ERROR
 #include "compiler_def.h"
 
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
