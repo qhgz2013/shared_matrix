@@ -5,7 +5,7 @@
  */
 
 /*
- * MEMORY LAYOUT documentation V1
+ * MEMORY LAYOUT documentation V1.0.3
  *
  * <<< SHARED MEMORY POINTER STARTS HERE
  * 
@@ -17,12 +17,20 @@
  * uint64 PAYLOAD_SIZE, size (in byte) of payload
  * uint32 N_MATRIX_DIMENSION, number of dimensions of shared matrix
  * (uint64*N_MATRIX_DIMENSION) MATRIX_DIMENSIONS, size of each dimension
+ * uint64 (optional) NZ_MAX, max allocated size for sparse matrix, optional, required when sparse flag is set
  * 
- * (unused memory padded to SHMEM_HEADER_PADDED_BYTES bytes)
+ * (unused memory padded to SHMEM_DATA_PADDED_BYTES bytes)
  * 
  * [ P A Y L O A D ]
  * (byte*16) (optional) ARRAY_HEADER, Matlab matrix header (required in Linux R2017b)
- * (byte*N) ARRAY_DATA, real data payload
+ * (byte*N) ARRAY_DATA, data payload (real / interleaved complex)
+ * (unused memory padded to SHMEM_DATA_PADDED_BYTES bytes)
+ * 
+ * (byte*(NZMAX*sizeof(mwIndex))) (optional) SPARSE_MATRIX_IR, Ir value for sparse matrix
+ * (unused memory padded to SHMEM_DATA_PADDED_BYTES bytes)
+ * 
+ * (byte*(NZMAX*sizeof(mwIndex))) (optional) SPARSE_MATRIX_JC, Jc value for sparse matrix
+ * (unused memory padded to SHMEM_DATA_PADDED_BYTES bytes)
  * 
  * >>> END OF SHARED MEMORY
  */
@@ -50,11 +58,14 @@
 // MODIFIABLE defines
 // Maximum string length of shared memory
 #define MAX_SHMEM_NAME_LENGTH 64
-// Header will be padded to multiple of ? bytes, 16 bytes at least, value must be 2^n
-#define SHMEM_HEADER_PADDED_BYTES 16
+// All data will be padded to multiple of ? bytes, 16 bytes at least, value must be 2^n
+#define SHMEM_DATA_PADDED_BYTES 16
 // Comment the following line to enable runtime output (requires re-compile)
 #define NO_DEBUG_OUTPUT
-#define SHMEM_MEMORY_LAYOUT_VERSION 1
+// Maximum pre-allocated size for storing MATRIX_DIMENSIONS array, if N_MATRIX_DIMENSION is larger than this value, then a dynamic memory allocation is made
+#define MAX_STATIC_ALLOCATED_DIMS 4
+// First integer for memory integrity test
+#define SHMEM_MEMORY_LAYOUT_VERSION 0x01000300
 
 #ifdef _MSC_VER
 // MSVC compiler
@@ -76,13 +87,21 @@
 #    elif !defined(SUPPRESS_NOT_SUPPORTED_ERROR)
 #        error "POSIX feature is unavailable in current GNU C compiler"
 #    endif
+#elif defined(__MINGW32__) || defined(__MINGW64__)
+// MinGW compiler
+#    ifndef SUPPRESS_NOT_SUPPORTED_ERROR
+#        error "MinGW compiler is not supported yet"
+#    endif
 #else
 #    ifndef SUPPRESS_NOT_SUPPORTED_ERROR
 #        error "No supported shared memory API"
 #    endif
 #endif
 
-// MX_HAS_INTERLEAVED_COMPLEX
+// Interleaved complex functionality (required when accessing complex data)
+#if defined(MX_HAS_INTERLEAVED_COMPLEX) && (MX_HAS_INTERLEAVED_COMPLEX == 1)
+#define SHMEM_COMPLEX_SUPPORTED
+#endif // MX_HAS_INTERLEAVED_COMPLEX
 
 // INT_CEIL(a,b) = (int) ceil( ((double)a) / ((double)b) ), where a and b are positive integers
 #define INT_CEIL(a,b) (1+((a)-1)/(b))

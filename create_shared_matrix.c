@@ -36,12 +36,15 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (mxIsSparse(prhs[1])) {
         array_attribute |= ARRAY_SPARSE;
         SHMEM_DEBUG_OUTPUT("Attribute flag: ARRAY_SPARSE\n");
-        mexErrMsgIdAndTxt("SharedMatrix:NotImplemented", "Sparse matrix is not implemented yet");
     }
     if (mxIsComplex(prhs[1])) {
+#ifndef SHMEM_COMPLEX_SUPPORTED
+        mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Complex array is not supported before R2018a");
+#else
         array_attribute |= ARRAY_COMPLEX;
         SHMEM_DEBUG_OUTPUT("Attribute flag: ARRAY_COMPLEX\n");
         mexErrMsgIdAndTxt("SharedMatrix:NotImplemented", "Complex data is not implemented yet");
+#endif
     }
     if (!mxIsNumeric(prhs[1])) {
         // TODO [prior: normal]: support logical type
@@ -51,6 +54,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     // DATA TYPE CHECK
     int data_size = 0;
     int data_class = mxUNKNOWN_CLASS;
+    unsigned long long n_elements = 0;
     if (mxIsInt8(prhs[1])) { data_size = 1; data_class = mxINT8_CLASS; }
     else if (mxIsInt16(prhs[1])) { data_size = 2; data_class = mxINT16_CLASS; }
     else if (mxIsInt32(prhs[1])) { data_size = 4; data_class = mxINT32_CLASS; }
@@ -62,7 +66,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     else if (mxIsSingle(prhs[1])) { data_size = 4; data_class = mxSINGLE_CLASS; }
     else if (mxIsDouble(prhs[1])) { data_size = 8; data_class = mxDOUBLE_CLASS; }
     else { mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Unsupported data type"); };
-    SHMEM_DEBUG_OUTPUT("Data size: %d\n", data_size);
+    SHMEM_DEBUG_OUTPUT("Data size: %d, data class: %d\n", data_size, data_class);
     
     // DIMENSION CHECK
     mwSize n_dims = mxGetNumberOfDimensions(prhs[1]);
@@ -71,18 +75,36 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Zero dimension is unsupported");
     const mwSize* dims = mxGetDimensions(prhs[1]);
     SHMEM_DEBUG_OUTPUT("Dimensions: %d", dims[0]); for (int i = 1; i < n_dims; i++) SHMEM_DEBUG_OUTPUT(" * %d", dims[i]); SHMEM_DEBUG_OUTPUT("\n");
+    if ((array_attribute & ARRAY_SPARSE) && n_dims != 2)
+        mexErrMsgIdAndTxt("SharedMatrix:DimensionError", "Sparse matrix only supports 2 dimensions");
     
     // COMPUTE REQUIRED BYTES
-    unsigned long long payload_size = data_size;
-    for (int i = 0; i < n_dims; i++)
-        payload_size *= dims[i];
-    payload_size += ARRAY_HEADER_SIZE;
-    unsigned long long header_size = 36; // LAYOUT_VERSION, HEADER_SIZE, MATRIX_TYPE, MATRIX_FLAG, PAYLOAD_SIZE, N_MATRIX_DIMENSION
-    header_size += n_dims * 8; // uint64 * N_MATRIX_DIMENSION
-    header_size = INT_CEIL(header_size, SHMEM_HEADER_PADDED_BYTES) * SHMEM_HEADER_PADDED_BYTES; // padded
-    SHMEM_DEBUG_OUTPUT("Header size: %d\n", header_size);
-    SHMEM_DEBUG_OUTPUT("Payload size: %lld\n", payload_size);
-    unsigned long long total_size = header_size + payload_size;
+    unsigned long long payload_size = 0;
+    unsigned int header_size = 36 + n_dims * 8;
+    if (array_attribute & ARRAY_SPARSE) {
+        // sparse array
+        n_elements = (unsigned long long)mxGetNzmax(prhs[1]);
+        SHMEM_DEBUG_OUTPUT("Nzmax: %lld\n", n_elements);
+        payload_size = n_elements * data_size + ARRAY_HEADER_SIZE; // Pr, Pi
+        payload_size = INT_CEIL(payload_size, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES; // padded
+        payload_size += n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE; // Ir
+        payload_size = INT_CEIL(payload_size, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES; // padded
+        payload_size += n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE; // Jc
+        header_size += 8; // extra header for NZ_MAX
+    }
+    else {
+        // dense array
+        n_elements = 1;
+        for (int i = 0; i < n_dims; i++)
+            n_elements *= dims[i];
+        payload_size = ARRAY_HEADER_SIZE + n_elements * data_size;
+    }
+    unsigned int header_size_padded = INT_CEIL(header_size, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES; // padded
+    unsigned long long payload_size_padded = INT_CEIL(payload_size, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES;
+    SHMEM_DEBUG_OUTPUT("Header size: %d (padded: %d)\n", header_size, header_size_padded);
+    SHMEM_DEBUG_OUTPUT("Payload size: %lld (padded: %lld)\n", payload_size, payload_size_padded);
+    unsigned long long total_size = header_size_padded + payload_size_padded;
+    SHMEM_DEBUG_OUTPUT("Total size: %lld\n", total_size);
     
     // CREATE SHARED MEMORY
 #if SHMEM_API == SHMEM_WIN_API
@@ -118,29 +140,61 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     // MEMORY COPY
     // HEADER
     SHMEM_WRITE_CAST(unsigned int, ptr, 0, SHMEM_MEMORY_LAYOUT_VERSION); // LAYOUT_VERSION
-    SHMEM_WRITE_CAST(unsigned int, ptr, 4, header_size); // HEADER_SIZE
+    SHMEM_WRITE_CAST(unsigned int, ptr, 4, header_size_padded); // HEADER_SIZE
     SHMEM_WRITE_CAST(unsigned long long, ptr, 8, data_class); // MATRIX_TYPE
-    SHMEM_WRITE_CAST(unsigned long long, ptr, 16, 0); // MATRIX_FLAG
-    SHMEM_WRITE_CAST(unsigned long long, ptr, 24, payload_size); // PAYLOAD_SIZE
+    SHMEM_WRITE_CAST(unsigned long long, ptr, 16, array_attribute); // MATRIX_FLAG
+    SHMEM_WRITE_CAST(unsigned long long, ptr, 24, payload_size_padded); // PAYLOAD_SIZE
     SHMEM_WRITE_CAST(unsigned int, ptr, 32, n_dims); // N_MATRIX_DIMENSION
     for (int i = 0; i < n_dims; i++)
         SHMEM_WRITE_CAST(unsigned long long, ptr, 36+i*8, dims[i]);
-    // PAYLOAD
-    const char* src_ptr = (const char*)mxGetPr(prhs[1]);
-    char* dst_ptr = ((char*)ptr) + header_size;
-    if (src_ptr == NULL) {
-#if SHMEM_API == SHMEM_WIN_API
-        UnmapViewOfFile(ptr);
-        CloseHandle(shmem);
-#elif SHMEM_API == SHMEM_POSIX_API
-        munmap(ptr, total_size);
-        shm_unlink(shmem_name);
-#endif
-        mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null pointer from non-empty array");
-    }
-    src_ptr = src_ptr - ARRAY_HEADER_SIZE;
-    memcpy(dst_ptr, src_ptr, total_size);
+    if (array_attribute & ARRAY_SPARSE)
+        SHMEM_WRITE_CAST(unsigned long long, ptr, 36+n_dims*8, n_elements);
 
+    // PAYLOAD
+    // register exception cleanup
+#if SHMEM_API == SHMEM_WIN_API
+#define EXC_CLEANUP UnmapViewOfFile(ptr); CloseHandle(shmem)
+#elif SHMEM_API == SHMEM_POSIX_API
+#define EXC_CLEANUP munmap(ptr, total_size); shm_unlink(shmem_name)
+#endif
+#define CHECK_PTR(ptr) { if (ptr == NULL) { EXC_CLEANUP; mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null pointer from non-empty array"); } }
+
+    if (array_attribute & ARRAY_COMPLEX) {
+        // complex array
+        // TODO [prior: normal]: implement it
+        if (array_attribute & ARRAY_SPARSE) {
+            // sparse complex array
+        }
+    }
+    else {
+        // non-complex array
+        const char* src_pr = (const char*)mxGetPr(prhs[1]);
+        CHECK_PTR(src_pr);
+        char* dst_pr = ((char*)ptr) + header_size_padded;
+        src_pr = src_pr - ARRAY_HEADER_SIZE;
+        if (array_attribute & ARRAY_SPARSE) {
+            // sparse non-complex array
+            const char* src_ir = (const char*)mxGetIr(prhs[1]);
+            CHECK_PTR(src_ir);
+            src_ir = src_ir - ARRAY_HEADER_SIZE;
+            const char* src_jc = (const char*)mxGetJc(prhs[1]);
+            CHECK_PTR(src_jc);
+            src_jc = src_jc - ARRAY_HEADER_SIZE;
+            unsigned long long ofs_ir = n_elements * data_size + ARRAY_HEADER_SIZE;
+            ofs_ir = INT_CEIL(ofs_ir, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES;
+            unsigned long long ofs_jc = ofs_ir + n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE;
+            ofs_jc = INT_CEIL(ofs_jc, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES;
+            printf("%d %d\n", ofs_ir, ofs_jc);
+            char* dst_ir = dst_pr + ofs_ir;
+            char* dst_jc = dst_pr + ofs_jc;
+            memcpy(dst_pr, src_pr, n_elements * data_size + ARRAY_HEADER_SIZE);
+            memcpy(dst_ir, src_ir, n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE);
+            memcpy(dst_jc, src_jc, n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE);
+        }
+        else {
+            memcpy(dst_pr, src_pr, payload_size);
+        }
+    }
     *base_pointer = (unsigned long long)ptr;
     if (output_value)
         *output_value = (unsigned long long)shmem;

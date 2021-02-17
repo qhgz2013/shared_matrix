@@ -78,14 +78,32 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     SHMEM_ATTACH_PTR(header_ptr, header_size);
     unsigned long long matrix_type = SHMEM_READ_CAST(unsigned long long, header_ptr, 8);
     SHMEM_DEBUG_OUTPUT("Matrix type: %lld\n", matrix_type);
-    unsigned long long matrix_flag = SHMEM_READ_CAST(unsigned long long, header_ptr, 16);
-    SHMEM_DEBUG_OUTPUT("Matrix flag: %lld\n", matrix_flag);
+    unsigned long long array_attribute = SHMEM_READ_CAST(unsigned long long, header_ptr, 16);
+    SHMEM_DEBUG_OUTPUT("Matrix flag: %lld\n", array_attribute);
     unsigned long long payload_size = SHMEM_READ_CAST(unsigned long long, header_ptr, 24);
     SHMEM_DEBUG_OUTPUT("Matrix payload size: %lld\n", payload_size);
     unsigned int n_dims = SHMEM_READ_CAST(unsigned int, header_ptr, 32);
     SHMEM_DEBUG_OUTPUT("Matrix dimension: %d\n", n_dims);
+
+    int data_size = 0;
+    if (matrix_type == mxINT8_CLASS || matrix_type == mxUINT8_CLASS) data_size = 1;
+    else if (matrix_type == mxINT16_CLASS || matrix_type == mxUINT16_CLASS) data_size = 2;
+    else if (matrix_type == mxINT32_CLASS || matrix_type == mxUINT32_CLASS || matrix_type == mxSINGLE_CLASS) data_size = 4;
+    else if (matrix_type == mxINT64_CLASS || matrix_type == mxUINT64_CLASS || matrix_type == mxDOUBLE_CLASS) data_size = 8;
+    if (data_size == 0) {
+        SHMEM_EXC_CLEANUP_HANDLE_PTR(header_ptr, header_size);
+        mexErrMsgIdAndTxt("SharedMatrix:CorruptMemory", "Read invalid matrix type");
+    }
+    SHMEM_DEBUG_OUTPUT("Data size: %d\n", data_size);
+
+    if (array_attribute & ARRAY_COMPLEX) {
+#ifndef SHMEM_COMPLEX_SUPPORTED
+        mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Complex array is not supported before R2018a");
+#endif
+    }
     
-    mwSize* dims = (mwSize*)malloc(sizeof(mwSize)*n_dims);
+    mwSize static_dims[MAX_STATIC_ALLOCATED_DIMS]; // pre-allocated stack space
+    mwSize* dims = (n_dims <= MAX_STATIC_ALLOCATED_DIMS) ? static_dims : (mwSize*)malloc(sizeof(mwSize)*n_dims);
     if (dims == NULL) {
         SHMEM_EXC_CLEANUP_HANDLE_PTR(header_ptr, header_size);
         mexErrMsgIdAndTxt("SharedMatrix:OutOfMemory", "Malloc failed to allocate new memory");
@@ -93,28 +111,70 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     for (int i = 0; i < n_dims; i++)
         dims[i] = (mwSize)SHMEM_READ_CAST(unsigned long long, header_ptr, 36+i*8);
     unsigned long long total_size = header_size + payload_size;
+    unsigned long long nzmax = 0;
+    if (array_attribute & ARRAY_SPARSE) {
+        nzmax = SHMEM_READ_CAST(unsigned long long, header_ptr, 36+n_dims*8);
+        SHMEM_DEBUG_OUTPUT("Nzmax: %lld\n", nzmax);
+    }
     SHMEM_EXC_CLEANUP_PTR(header_ptr, header_size);
 
     // CREATE RETURN MATLAB ARRAY
-    mxArray* output_array = mxCreateNumericArray((mwSize)n_dims, dims, (int)matrix_type, mxREAL); // only supports real
+    mxArray* output_array = NULL;
+    int complex_flag = (array_attribute & ARRAY_COMPLEX) ? mxCOMPLEX : mxREAL;
+    if (array_attribute & ARRAY_SPARSE) {
+        // sparse array
+        if (n_dims != 2) {
+            SHMEM_EXC_CLEANUP_HANDLE;
+            if (n_dims > MAX_STATIC_ALLOCATED_DIMS) free(dims);
+            mexErrMsgIdAndTxt("SharedMatrix:DimensionError", "Sparse matrix only supports 2 dimensions");
+        }
+        output_array = mxCreateSparse(dims[0], dims[1], nzmax, complex_flag);
+    }
+    else {
+        output_array = mxCreateNumericArray((mwSize)n_dims, dims, (int)matrix_type, complex_flag);
+    }
     if (output_array == NULL) {
         SHMEM_EXC_CLEANUP_HANDLE;
-        free(dims);
+        if (n_dims > MAX_STATIC_ALLOCATED_DIMS) free(dims);
         mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Failed to call Matlab mex API: mxCreateNumericArray");
     }
+    SHMEM_DEBUG_OUTPUT("Output mxArray created: %p\n", output_array);
 
     // READ FULL SHARED MEMORY
     void* ptr = NULL;
     SHMEM_ATTACH_PTR(ptr, total_size);
-    char* payload_ptr = ((char*)ptr) + header_size + ARRAY_HEADER_SIZE;
+    SHMEM_DEBUG_OUTPUT("Got shared memory pointer: %p\n", ptr);
+    char* ptr_pr = ((char*)ptr) + header_size;
 
     // FREE ORIGINAL ARRAY
     void* original_ptr = mxGetPr(output_array);
-    if (original_ptr)
-        mxFree(original_ptr);
     
     // ATTACH PTR
-    mxSetPr(output_array, (double*)payload_ptr);
+    if (array_attribute & ARRAY_COMPLEX) {
+        SHMEM_EXC_CLEANUP_HANDLE_PTR(ptr, total_size);
+        mexErrMsgIdAndTxt("SharedMatrix:NotImplemented", "Complex data is not implemented yet");
+    }
+    else {
+        mxSetPr(output_array, (double*)(ptr_pr + ARRAY_HEADER_SIZE));
+        SHMEM_DEBUG_OUTPUT("CALL mxSetPr done\n");
+    }
+    if (original_ptr) {
+        mxFree(original_ptr);
+        SHMEM_DEBUG_OUTPUT("CALL mxFree done\n");
+    }
+    if (array_attribute & ARRAY_SPARSE) {
+        unsigned long long ofs_ir = nzmax * data_size + ARRAY_HEADER_SIZE;
+        ofs_ir = INT_CEIL(ofs_ir, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES;
+        unsigned long long ofs_jc = ofs_ir + nzmax * sizeof(mwIndex) + ARRAY_HEADER_SIZE;
+        ofs_jc = INT_CEIL(ofs_jc, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES;
+            printf("%d %d\n", ofs_ir, ofs_jc);
+        char* ptr_ir = ptr_pr + ofs_ir;
+        char* ptr_jc = ptr_pr + ofs_jc;
+        mxSetIr(output_array, (mwIndex*)(ptr_ir + ARRAY_HEADER_SIZE));
+        SHMEM_DEBUG_OUTPUT("CALL mxSetIr done\n");
+        mxSetJc(output_array, (mwIndex*)(ptr_jc + ARRAY_HEADER_SIZE));
+        SHMEM_DEBUG_OUTPUT("CALL mxSetJc done\n");
+    }
 
     plhs[0] = output_array;
     *output_handle = (unsigned long long)shmem;

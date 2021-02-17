@@ -9,6 +9,16 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nrhs < 2 || nrhs > 3)
         mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Expected 2 or 3 input arguments, but got %d", nrhs);
     MATLAB_PRHS_PTR_CHECK(2);
+
+    // address containing base ptr
+    unsigned long long* ptr_base = (unsigned long long*)mxGetPr(prhs[1]);
+    if (ptr_base == NULL)
+        mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null data pointer from non-null array object");
+    ptr_base = (unsigned long long*)*ptr_base;
+    if (ptr_base == NULL)
+        mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Pointer address is assigned to zero");
+    SHMEM_DEBUG_OUTPUT("Base pointer: %p\n", ptr_base);
+
     if (nrhs == 3) {
         const mxArray* cell = prhs[2];
         if (cell == NULL)
@@ -16,23 +26,42 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         if (!mxIsCell(cell))
             mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Input argument [3] must be a cell");
         if (mxGetM(cell) * mxGetN(cell) > 0) {
+            // needs to replace matlab mxArray pointer
+
+            // check array attribute
+            unsigned long long array_attribute = SHMEM_READ_CAST(unsigned long long, ptr_base, 16);
+            SHMEM_DEBUG_OUTPUT("Array attribute: %lld\n", array_attribute);
+
             mxArray* data_array = mxGetCell(cell, 0);
             if (data_array == NULL)
                 mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null array object pointer");
             // set dimension
             const mwSize zero_dims[] = { 0, 0 };
             mxSetDimensions(data_array, zero_dims, 2);
+
+            if (array_attribute & ARRAY_COMPLEX) {
+#ifndef SHMEM_COMPLEX_SUPPORTED
+                mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Complex array is not supported before R2018a");
+#else
+                mexErrMsgIdAndTxt("SharedMatrix:NotImplemented", "Complex matrix is not implemented");
+#endif
+            }
+
+            if (array_attribute & ARRAY_SPARSE) {
+                // sparse array
+                mxSetNzmax(data_array, 0);
+                SHMEM_DEBUG_OUTPUT("CALL mxSetNzmax done\n");
+                mxSetIr(data_array, NULL);
+                SHMEM_DEBUG_OUTPUT("CALL mxSetIr done\n");
+                mxSetJc(data_array, NULL);
+                SHMEM_DEBUG_OUTPUT("CALL mxSetJc done\n");
+            }
             // detach array
             mxSetPr(data_array, NULL);
+            SHMEM_DEBUG_OUTPUT("CALL mxSetPr done\n");
         }
     }
 
-    unsigned long long* ptr_base = (unsigned long long*)mxGetPr(prhs[1]);
-    if (ptr_base == NULL)
-        mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null data pointer from non-null array object");
-    if ((*ptr_base) == 0)
-        mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Pointer address is assigned to zero");
-    SHMEM_DEBUG_OUTPUT("Base pointer: %p\n", *ptr_base);
     // release shared memory
 #if SHMEM_API == SHMEM_WIN_API
     unsigned long long* ptr_handle = (unsigned long long*)mxGetPr(prhs[0]);
