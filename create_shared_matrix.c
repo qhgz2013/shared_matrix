@@ -43,7 +43,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 #else
         array_attribute |= ARRAY_COMPLEX;
         SHMEM_DEBUG_OUTPUT("Attribute flag: ARRAY_COMPLEX\n");
-        mexErrMsgIdAndTxt("SharedMatrix:NotImplemented", "Complex data is not implemented yet");
 #endif
     }
     if (!mxIsNumeric(prhs[1])) {
@@ -66,6 +65,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     else if (mxIsSingle(prhs[1])) { data_size = 4; data_class = mxSINGLE_CLASS; }
     else if (mxIsDouble(prhs[1])) { data_size = 8; data_class = mxDOUBLE_CLASS; }
     else { mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Unsupported data type"); };
+    if (array_attribute & ARRAY_COMPLEX) data_size *= 2;
     SHMEM_DEBUG_OUTPUT("Data size: %d, data class: %d\n", data_size, data_class);
     
     // DIMENSION CHECK
@@ -89,7 +89,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         payload_size = INT_CEIL(payload_size, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES; // padded
         payload_size += n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE; // Ir
         payload_size = INT_CEIL(payload_size, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES; // padded
-        payload_size += n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE; // Jc
+        payload_size += (dims[1] + 1) * sizeof(mwIndex) + ARRAY_HEADER_SIZE; // Jc
         header_size += 8; // extra header for NZ_MAX
     }
     else {
@@ -108,34 +108,47 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     
     // CREATE SHARED MEMORY
 #if SHMEM_API == SHMEM_WIN_API
+    SHMEM_DEBUG_OUTPUT("API call: CreateFileMappingA\n");
     HANDLE shmem = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, (DWORD)((total_size >> 32) & 0xffffffff), (DWORD)(total_size & 0xffffffff), shmem_name);
     if (shmem == NULL) {
         mexErrMsgIdAndTxt("SharedMatrix:NativeAPICallFailed", "WIN API CreateFileMappingA failed: %d", GetLastError());
     }
+    SHMEM_DEBUG_OUTPUT("API call: MapViewOfFile\n");
     void* ptr = MapViewOfFile(shmem, FILE_MAP_ALL_ACCESS, 0, 0, total_size);
     if (ptr == NULL) {
         int map_vof_err = GetLastError();
+        SHMEM_DEBUG_OUTPUT("API call: CloseHandle\n");
         CloseHandle(shmem);
         mexErrMsgIdAndTxt("SharedMatrix:NativeAPICallFailed", "WIN API MapViewOfFile failed: %d", map_vof_err);
     }
 #elif SHMEM_API == SHMEM_POSIX_API
+    SHMEM_DEBUG_OUTPUT("API call: shm_open\n");
     int shmem = shm_open(shmem_name, O_CREAT | O_RDWR, 0666);
     if (shmem == -1) {
         mexErrMsgIdAndTxt("SharedMatrix:NativeAPICallFailed", "POSIX API shm_open failed: %d", errno);
     }
+    SHMEM_DEBUG_OUTPUT("API call: ftruncate\n");
     int trunc_result = ftruncate(shmem, total_size);
     if (trunc_result == -1) {
         int trunc_errno = errno;
+        SHMEM_DEBUG_OUTPUT("API call: close\n");
+        close(shmem);
+        SHMEM_DEBUG_OUTPUT("API call: shm_unlink\n");
         shm_unlink(shmem_name);
         mexErrMsgIdAndTxt("SharedMatrix:NativeAPICallFailed", "POSIX API ftruncate failed: %d", trunc_errno);
     }
+    SHMEM_DEBUG_OUTPUT("API call: mmap\n");
     void* ptr = mmap(0, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shmem, 0);
     if (ptr == MAP_FAILED) {
         int map_errno = errno;
+        SHMEM_DEBUG_OUTPUT("API call: close\n");
+        close(shmem);
+        SHMEM_DEBUG_OUTPUT("API call: shm_unlink\n");
         shm_unlink(shmem_name);
         mexErrMsgIdAndTxt("SharedMatrix:NativeAPICallFailed", "POSIX API mmap failed: %d", map_errno);
     }
 #endif
+    SHMEM_DEBUG_OUTPUT("Shared memory pointer: %p\n", ptr);
     
     // MEMORY COPY
     // HEADER
@@ -153,47 +166,54 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     // PAYLOAD
     // register exception cleanup
 #if SHMEM_API == SHMEM_WIN_API
-#define EXC_CLEANUP UnmapViewOfFile(ptr); CloseHandle(shmem)
+#define EXC_CLEANUP SHMEM_DEBUG_OUTPUT("API call: UnmapViewOfFile\n"); UnmapViewOfFile(ptr); SHMEM_DEBUG_OUTPUT("API call: CloseHandle\n"); CloseHandle(shmem)
 #elif SHMEM_API == SHMEM_POSIX_API
-#define EXC_CLEANUP munmap(ptr, total_size); shm_unlink(shmem_name)
+#define EXC_CLEANUP SHMEM_DEBUG_OUTPUT("API call: munmap\n"); munmap(ptr, total_size); SHMEM_DEBUG_OUTPUT("API call: close\n"); close(shmem); SHMEM_DEBUG_OUTPUT("API call: shm_unlink\n"); shm_unlink(shmem_name)
 #endif
 #define CHECK_PTR(ptr) { if (ptr == NULL) { EXC_CLEANUP; mexErrMsgIdAndTxt("SharedMatrix:MatlabError", "Got null pointer from non-empty array"); } }
 
+    const char* src_pr = NULL;
     if (array_attribute & ARRAY_COMPLEX) {
         // complex array
-        // TODO [prior: normal]: implement it
-        if (array_attribute & ARRAY_SPARSE) {
-            // sparse complex array
-        }
+#ifdef SHMEM_COMPLEX_SUPPORTED
+        src_pr = (const char*)get_ic_ptr(prhs[1], data_class);
+#endif
     }
     else {
         // non-complex array
-        const char* src_pr = (const char*)mxGetPr(prhs[1]);
-        CHECK_PTR(src_pr);
-        char* dst_pr = ((char*)ptr) + header_size_padded;
-        src_pr = src_pr - ARRAY_HEADER_SIZE;
-        if (array_attribute & ARRAY_SPARSE) {
-            // sparse non-complex array
-            const char* src_ir = (const char*)mxGetIr(prhs[1]);
-            CHECK_PTR(src_ir);
-            src_ir = src_ir - ARRAY_HEADER_SIZE;
-            const char* src_jc = (const char*)mxGetJc(prhs[1]);
-            CHECK_PTR(src_jc);
-            src_jc = src_jc - ARRAY_HEADER_SIZE;
-            unsigned long long ofs_ir = n_elements * data_size + ARRAY_HEADER_SIZE;
-            ofs_ir = INT_CEIL(ofs_ir, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES;
-            unsigned long long ofs_jc = ofs_ir + n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE;
-            ofs_jc = INT_CEIL(ofs_jc, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES;
-            printf("%d %d\n", ofs_ir, ofs_jc);
-            char* dst_ir = dst_pr + ofs_ir;
-            char* dst_jc = dst_pr + ofs_jc;
-            memcpy(dst_pr, src_pr, n_elements * data_size + ARRAY_HEADER_SIZE);
-            memcpy(dst_ir, src_ir, n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE);
-            memcpy(dst_jc, src_jc, n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE);
-        }
-        else {
-            memcpy(dst_pr, src_pr, payload_size);
-        }
+        src_pr = (const char*)mxGetPr(prhs[1]);
+    }
+    SHMEM_DEBUG_OUTPUT("Array pr: %p\n", src_pr);
+    CHECK_PTR(src_pr);
+
+    char* dst_pr = ((char*)ptr) + header_size_padded;
+    src_pr = src_pr - ARRAY_HEADER_SIZE;
+    if (array_attribute & ARRAY_SPARSE) {
+        // sparse non-complex array
+        const char* src_ir = (const char*)mxGetIr(prhs[1]);
+        SHMEM_DEBUG_OUTPUT("Array ir: %p\n", src_ir);
+        CHECK_PTR(src_ir);
+        src_ir = src_ir - ARRAY_HEADER_SIZE;
+        const char* src_jc = (const char*)mxGetJc(prhs[1]);
+        SHMEM_DEBUG_OUTPUT("Array jc: %p\n", src_jc);
+        CHECK_PTR(src_jc);
+        src_jc = src_jc - ARRAY_HEADER_SIZE;
+        unsigned long long ofs_ir = n_elements * data_size + ARRAY_HEADER_SIZE;
+        ofs_ir = INT_CEIL(ofs_ir, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES;
+        unsigned long long ofs_jc = ofs_ir + n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE;
+        ofs_jc = INT_CEIL(ofs_jc, SHMEM_DATA_PADDED_BYTES) * SHMEM_DATA_PADDED_BYTES;
+        char* dst_ir = dst_pr + ofs_ir;
+        char* dst_jc = dst_pr + ofs_jc;
+        SHMEM_DEBUG_OUTPUT("pr: memcpy %p -> %p (size: %lld)\n", src_pr, dst_pr, n_elements * data_size + ARRAY_HEADER_SIZE);
+        memcpy(dst_pr, src_pr, n_elements * data_size + ARRAY_HEADER_SIZE);
+        SHMEM_DEBUG_OUTPUT("ir: memcpy %p -> %p (size: %lld)\n", src_ir, dst_ir, n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE);
+        memcpy(dst_ir, src_ir, n_elements * sizeof(mwIndex) + ARRAY_HEADER_SIZE);
+        SHMEM_DEBUG_OUTPUT("jc: memcpy %p -> %p (size: %lld)\n", src_jc, dst_jc, (dims[1] + 1) * sizeof(mwIndex) + ARRAY_HEADER_SIZE);
+        memcpy(dst_jc, src_jc, (dims[1] + 1) * sizeof(mwIndex) + ARRAY_HEADER_SIZE);
+    }
+    else {
+        SHMEM_DEBUG_OUTPUT("pr: memcpy %p -> %p (size: %lld)\n", src_pr, dst_pr, payload_size);
+        memcpy(dst_pr, src_pr, payload_size);
     }
     *base_pointer = (unsigned long long)ptr;
     if (output_value)

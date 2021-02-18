@@ -67,12 +67,22 @@
 // First integer for memory integrity test
 #define SHMEM_MEMORY_LAYOUT_VERSION 0x01000300
 
+// Matlab architecture, pass it by -D option
+#ifdef ARCH_WIN64
+#define ARRAY_HEADER_SIZE 0
+#elif defined ARCH_GLNXA64
+#define ARRAY_HEADER_SIZE 16
+#endif
+
 #ifdef _MSC_VER
 // MSVC compiler
 #    include <Windows.h>
 #    pragma comment(lib, "user32.lib")
 #    define SHMEM_API SHMEM_WIN_API
-#    define ARRAY_HEADER_SIZE 0
+// assumes ARCH_WIN64
+#    ifndef ARRAY_HEADER_SIZE
+#        define ARRAY_HEADER_SIZE 0
+#    endif
 #elif defined __GNUC__
 // GCC compiler
 #    ifdef _POSIX_C_SOURCE
@@ -83,7 +93,10 @@
 #        include <unistd.h>
 #        include <errno.h>
 #        define SHMEM_API SHMEM_POSIX_API
-#        define ARRAY_HEADER_SIZE 16
+// assumes ARCH_GLNXA64
+#        ifndef ARRAY_HEADER_SIZE
+#            define ARRAY_HEADER_SIZE 16
+#        endif
 #    elif !defined(SUPPRESS_NOT_SUPPORTED_ERROR)
 #        error "POSIX feature is unavailable in current GNU C compiler"
 #    endif
@@ -101,6 +114,36 @@
 // Interleaved complex functionality (required when accessing complex data)
 #if defined(MX_HAS_INTERLEAVED_COMPLEX) && (MX_HAS_INTERLEAVED_COMPLEX == 1)
 #define SHMEM_COMPLEX_SUPPORTED
+inline void* get_ic_ptr(const mxArray* arr, int cls) {
+#define SHMEM_GET_COMPLEX(cls_upper, func) if (cls == mx##cls_upper##_CLASS) return mxGetComplex##func##s(arr)
+    SHMEM_GET_COMPLEX(DOUBLE, Double);
+    SHMEM_GET_COMPLEX(SINGLE, Single);
+    SHMEM_GET_COMPLEX(INT32, Int32);
+    SHMEM_GET_COMPLEX(UINT32, Uint32);
+    SHMEM_GET_COMPLEX(INT64, Int64);
+    SHMEM_GET_COMPLEX(UINT64, Uint64);
+    SHMEM_GET_COMPLEX(INT8, Int8);
+    SHMEM_GET_COMPLEX(UINT8, Uint8);
+    SHMEM_GET_COMPLEX(INT16, Int16);
+    SHMEM_GET_COMPLEX(UINT16, Uint16);
+    return NULL;
+#undef SHMEM_GET_COMPLEX
+}
+inline void set_ic_ptr(mxArray* arr, int cls, void* ptr) {
+#define SHMEM_SET_COMPLEX(cls_upper, func) if (cls == mx##cls_upper##_CLASS) { mxSetComplex##func##s(arr, ( mxComplex##func *)ptr); return; }
+    SHMEM_SET_COMPLEX(DOUBLE, Double);
+    SHMEM_SET_COMPLEX(SINGLE, Single);
+    SHMEM_SET_COMPLEX(INT32, Int32);
+    SHMEM_SET_COMPLEX(UINT32, Uint32);
+    SHMEM_SET_COMPLEX(INT64, Int64);
+    SHMEM_SET_COMPLEX(UINT64, Uint64);
+    SHMEM_SET_COMPLEX(INT8, Int8);
+    SHMEM_SET_COMPLEX(UINT8, Uint8);
+    SHMEM_SET_COMPLEX(INT16, Int16);
+    SHMEM_SET_COMPLEX(UINT16, Uint16);
+#undef SHMEM_SET_COMPLEX
+}
+
 #endif // MX_HAS_INTERLEAVED_COMPLEX
 
 // INT_CEIL(a,b) = (int) ceil( ((double)a) / ((double)b) ), where a and b are positive integers
