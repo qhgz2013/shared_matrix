@@ -71,6 +71,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgIdAndTxt("SharedMatrix:NativeAPICallFailed", "POSIX API shm_open failed: %d", errno);
     }
 #endif
+    SHMEM_DEBUG_OUTPUT("Handle: %lld\n", (unsigned long long)shmem);
     SHMEM_ATTACH_PTR(header_ptr, 8);
     if (SHMEM_READ_CAST(unsigned int, header_ptr, 0) != SHMEM_MEMORY_LAYOUT_VERSION) {
         SHMEM_EXC_CLEANUP_HANDLE_PTR(header_ptr, 8);

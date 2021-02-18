@@ -1,4 +1,4 @@
-classdef shared_matrix_host < handle
+classdef shared_matrix_host
     properties (GetAccess = public, SetAccess = private)
         Name
         % HOST does not need to keep a data matrix (it's written to shared memory)
@@ -33,10 +33,6 @@ classdef shared_matrix_host < handle
                 obj.IsAttached = false;
                 delete_shared_matrix(obj.Handle, obj.BasePointer, [], obj.Name);
             end
-        end
-        
-        function delete(obj)
-            obj.detach();
         end
     end
 end

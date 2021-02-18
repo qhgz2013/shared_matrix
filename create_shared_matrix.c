@@ -148,6 +148,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgIdAndTxt("SharedMatrix:NativeAPICallFailed", "POSIX API mmap failed: %d", map_errno);
     }
 #endif
+    SHMEM_DEBUG_OUTPUT("Handle: %lld\n", (unsigned long long)shmem);
     SHMEM_DEBUG_OUTPUT("Shared memory pointer: %p\n", ptr);
     
     // MEMORY COPY
