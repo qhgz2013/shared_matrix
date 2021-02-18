@@ -79,12 +79,14 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     CloseHandle(handle);
 #elif SHMEM_API == SHMEM_POSIX_API
     int handle = (int)*ptr_handle;
-    char shmem_name[MAX_SHMEM_NAME_LENGTH];
-    if (!mxIsChar(prhs[3]) || mxGetString(prhs[3], shmem_name, MAX_SHMEM_NAME_LENGTH))
-        mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Could not get input arg [1]: shared memory name");
-    if (strlen(shmem_name) == 0)
-        mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Empty shared memory name");
-    SHMEM_DEBUG_OUTPUT("Shared memory name: %s\n", shmem_name);
+    char shmem_name[MAX_SHMEM_NAME_LENGTH] = "";
+    if (!mxIsEmpty(prhs[3])) {
+        if (!mxIsChar(prhs[3]) || mxGetString(prhs[3], shmem_name, MAX_SHMEM_NAME_LENGTH))
+            mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Could not get input arg [4]: shared memory name");
+        if (strlen(shmem_name) == 0)
+            mexErrMsgIdAndTxt("SharedMatrix:InvalidInput", "Empty shared memory name");
+        SHMEM_DEBUG_OUTPUT("Shared memory name: %s\n", shmem_name);
+    }
     unsigned int header_size = SHMEM_READ_CAST(unsigned int, ptr_base, 4);
     unsigned long long payload_size = SHMEM_READ_CAST(unsigned long long, ptr_base, 24);
     unsigned long long total_size = payload_size + header_size;
@@ -93,8 +95,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     munmap(ptr_base, total_size);
     SHMEM_DEBUG_OUTPUT("API call: close\n");
     close(handle);
-    SHMEM_DEBUG_OUTPUT("API call: shm_unlink\n");
-    shm_unlink(shmem_name);
+    if (*shmem_name) {
+        SHMEM_DEBUG_OUTPUT("API call: shm_unlink\n");
+        shm_unlink(shmem_name);
+    }
 #endif
     if (throw_error_not_supported)
         mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Complex array is not supported before R2018a, god bless matlab will not be crashed");

@@ -32,7 +32,7 @@ classdef shared_matrix < handle
         function detach(obj)
             if obj.IsAttached
                 obj.IsAttached = false;
-                delete_shared_matrix(obj.Handle, obj.BasePointer, obj.CellArray, obj.Name);
+                delete_shared_matrix(obj.Handle, obj.BasePointer, obj.CellArray, []);
             end
         end
         
