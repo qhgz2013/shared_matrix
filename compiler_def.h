@@ -54,6 +54,14 @@
 // Array attributes
 #define ARRAY_SPARSE  0x1
 #define ARRAY_COMPLEX 0x2
+#define ARRAY_LOGICAL 0x4
+// Valid attributes
+// #  SPARSE COMPLEX LOGICAL
+// 1  O      X       X
+// 2  X      O       X
+// 3  X      X       O
+// 4  O      O       X
+// 5  O      X       O
 
 // MODIFIABLE defines
 // Maximum string length of shared memory

@@ -46,8 +46,15 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 #endif
     }
     if (!mxIsNumeric(prhs[1])) {
-        // TODO [prior: normal]: support logical type
-        mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Only supports numeric data");
+        if (mxIsLogical(prhs[1])) {
+            // logical array
+            if (array_attribute & ARRAY_COMPLEX)
+                mexErrMsgIdAndTxt("SharedMatrix:AttributeError", "Logical attribute could not composite with complex");
+            array_attribute |= ARRAY_LOGICAL;
+            SHMEM_DEBUG_OUTPUT("Attribute flag: ARRAY_LOGICAL\n");
+        }
+        else
+            mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Only supports numeric or logical data");
     }
     
     // DATA TYPE CHECK
@@ -64,6 +71,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     else if (mxIsUint64(prhs[1])) { data_size = 8; data_class = mxUINT64_CLASS; }
     else if (mxIsSingle(prhs[1])) { data_size = 4; data_class = mxSINGLE_CLASS; }
     else if (mxIsDouble(prhs[1])) { data_size = 8; data_class = mxDOUBLE_CLASS; }
+    else if (mxIsLogical(prhs[1])) { data_size = 1; data_class = mxLOGICAL_CLASS; }
     else { mexErrMsgIdAndTxt("SharedMatrix:NotSupported", "Unsupported data type"); };
     if (array_attribute & ARRAY_COMPLEX) data_size *= 2;
     SHMEM_DEBUG_OUTPUT("Data size: %d, data class: %d\n", data_size, data_class);

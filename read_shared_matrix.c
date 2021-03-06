@@ -97,7 +97,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     SHMEM_DEBUG_OUTPUT("Matrix dimension: %d\n", n_dims);
 
     int data_size = 0;
-    if (matrix_type == mxINT8_CLASS || matrix_type == mxUINT8_CLASS) data_size = 1;
+    if (matrix_type == mxINT8_CLASS || matrix_type == mxUINT8_CLASS || matrix_type == mxLOGICAL_CLASS) data_size = 1;
     else if (matrix_type == mxINT16_CLASS || matrix_type == mxUINT16_CLASS) data_size = 2;
     else if (matrix_type == mxINT32_CLASS || matrix_type == mxUINT32_CLASS || matrix_type == mxSINGLE_CLASS) data_size = 4;
     else if (matrix_type == mxINT64_CLASS || matrix_type == mxUINT64_CLASS || matrix_type == mxDOUBLE_CLASS) data_size = 8;
@@ -141,7 +141,14 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             if (n_dims > MAX_STATIC_ALLOCATED_DIMS) free(dims);
             mexErrMsgIdAndTxt("SharedMatrix:DimensionError", "Sparse matrix only supports 2 dimensions");
         }
-        output_array = mxCreateSparse(dims[0], dims[1], nzmax, complex_flag);
+        if (matrix_type == mxDOUBLE_CLASS)
+            output_array = mxCreateSparse(dims[0], dims[1], nzmax, complex_flag);
+        else if (matrix_type == mxLOGICAL_CLASS)
+            output_array = mxCreateSparseLogicalMatrix(dims[0], dims[1], nzmax);
+        else {
+            if (n_dims > MAX_STATIC_ALLOCATED_DIMS) free(dims);
+            mexErrMsgIdAndTxt("SharedMatrix:DataTypeError", "Sparse matrix only supports double and logical data");
+        }
     }
     else {
         output_array = mxCreateNumericArray((mwSize)n_dims, dims, (int)matrix_type, complex_flag);
