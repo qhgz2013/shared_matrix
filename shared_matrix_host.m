@@ -1,4 +1,4 @@
-classdef shared_matrix_host
+classdef shared_matrix_host < handle
     properties (GetAccess = public, SetAccess = private)
         Name
         % HOST does not need to keep a data matrix (it's written to shared memory)
