@@ -14,7 +14,7 @@ Linux: GCC Compiler (using POSIX API), GLNXA64 Matlab
 ## Tested environments
 
 Windows: R2018b + VS 2019  
-Linux: R2017b + GCC 7.5.0
+Linux: R2017b + GCC 7.5.0, R2018b + GCC 7.5.0
 
 # Usage
 
@@ -79,6 +79,30 @@ sum_b = sum(sum_vector);
 % have a comparison
 sum_a
 sum_b
+```
+
+A more simple way to use:
+
+```matlab
+a = randn(16*4096, 4096);
+b = randn(16*4096, 4096);
+% ... more arguments
+host = create_shmat(a, b); % create a MATLAB-struct holding all host memory
+sum_a = sum(a(:));
+sum_b = sum(b(:));
+clear a
+
+sum_vector = zeros(4096, 1);
+parfor i = 1:4096
+    [dev, data] = attach_shmat(host); % equivalent to call .attach() and .get_data(), all data are stored in "data" struct
+    sum_vector(i) = sum(data.a(:, i)) + sum(data.b(:, i));
+    detach_shmat(dev); % equivalent to call .detach()
+end
+detach_shmat(host);
+
+% comparison
+disp(sum_a + sub_b);
+disp(sum(sum_vector));
 ```
 
 ## Notice
