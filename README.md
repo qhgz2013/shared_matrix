@@ -101,7 +101,7 @@ end
 detach_shmat(host);
 
 % comparison
-disp(sum_a + sub_b);
+disp(sum_a + sum_b);
 disp(sum(sum_vector));
 ```
 
